@@ -1,0 +1,20 @@
+#Environment Variables and Secrets
+.env
+.env.*
+!.env.example
+
+#Node.JS Dependencies
+node_modules/
+
+#Logs
+*.log
+npm-debug.log*
+
+#Terraform Local files and state
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+#macOS
+.DS_Store
