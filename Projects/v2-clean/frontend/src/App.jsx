@@ -194,7 +194,7 @@ function App() {
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-400 text-lg font-black text-slate-950">R</div>
           <div>
             <p className="font-semibold tracking-wide text-white">RaaS <span className="text-cyan-400">2.0</span></p>
-            <p className="text-xs text-slate-500">A reboot Service Model</p>
+            <p className="text-xs text-slate-500">Reboot as a Service</p>
           </div>
         </div>
 
