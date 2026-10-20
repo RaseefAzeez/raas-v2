@@ -1,11 +1,65 @@
 
+const Redis = require("ioredis");
 const express = require("express");
 const { operationQueue } = require("./operationQueue");
 
 const app = express();
 const PORT = 3000;
 
+const healthRedis = new Redis({
+    host: process.env.REDIS_HOST || "127.0.0.1",
+    port: Number(process.env.REDIS_PORT || 6379),
+    lazyConnect: true,
+    connectTimeout: 1000,
+    maxRetriesPerRequest: 0,
+    enableOfflineQueue: false,
+    retryStrategy: (times) => Math.min(times * 100, 1000)
+});
+
+healthRedis.on("error", (error) => {
+    console.error("Redis health-check error:", error.message);
+});
+
 app.use(express.json());
+
+// Liveness: is the API process responding?
+app.get("/health/live", (req, res) => {
+    res.status(200).json({
+        status: "alive"
+    });
+});
+
+// Readiness: can the API reach Redis?
+app.get("/health/ready", async (req, res) => {
+    let timeout;
+
+    try {
+        const ping = healthRedis.ping();
+
+        await Promise.race([
+            ping,
+            new Promise((_, reject) => {
+                timeout = setTimeout(
+                    () => reject(new Error("Redis health check timed out")),
+                    1500
+                );
+            })
+        ]);
+
+        res.status(200).json({
+            status: "ready",
+            redis: "available"
+        });
+    } catch (error) {
+        res.status(503).json({
+            status: "not_ready",
+            redis: "unavailable"
+        });
+    } finally {
+        clearTimeout(timeout);
+    }
+});
+
 
 app.get("/health", (req, res) => {
     res.status(200).json({

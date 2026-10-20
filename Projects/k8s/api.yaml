@@ -1,0 +1,57 @@
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raas-api
+  namespace: raas
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: raas-api
+  template:
+    metadata:
+      labels:
+        app: raas-api
+    spec:
+      containers:
+        - name: api
+          image: projects-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: REDIS_HOST
+              value: redis
+            - name: REDIS_PORT
+              value: "6379"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: raas-api
+  namespace: raas
+spec:
+  type: ClusterIP
+  selector:
+    app: raas-api
+  ports:
+    - port: 3000
+      targetPort: 3000
