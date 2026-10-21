@@ -97,32 +97,61 @@ app.post("/reboot", async (req, res) => {
 });
 
 
-app.get("/jobs/:jobId", async (req, res) => {
+app.get("/jobs", async (req, res) => {
     try {
-        const jobId = req.params.jobId;
+        const states = [
+            "waiting",
+            "active",
+            "completed",
+            "failed",
+            "delayed",
+            "waiting-children",
+            "paused"
+        ];
 
-        const job = await operationQueue.getJob(jobId);
+        const jobs = await operationQueue.getJobs(
+            states,
+            0,
+            49,
+            false
+        );
 
-        if (!job) {
-            return res.status(404).json({
-                error: "Job not found",
-                jobId: jobId
-            });
-        }
+        const jobHistory = await Promise.all(
+            jobs.map(async (job) => {
+                const status = await job.getState();
 
-        const status = await job.getState();
+                return {
+                    jobId: job.id,
+                    instanceId: job.data.instanceId,
+                    action: job.data.action,
+                    status,
+                    timestamp: job.timestamp,
+                    finishedOn: job.finishedOn ?? null,
+                    result:
+                        status === "completed"
+                            ? job.returnvalue
+                            : undefined,
+                    error:
+                        status === "failed"
+                            ? job.failedReason
+                            : undefined
+                };
+            })
+        );
+
+        jobHistory.sort(
+            (a, b) => b.timestamp - a.timestamp
+        );
 
         res.status(200).json({
-            jobId: job.id,
-            status: status,
-            result: status === "completed" ? job.returnvalue : undefined,
-            error: status === "failed" ? job.failedReason : undefined
+            count: jobHistory.length,
+            jobs: jobHistory
         });
     } catch (error) {
-        console.error("Failed to retrieve job status:", error.message);
+        console.error("Failed to retrieve job history:", error.message);
 
         res.status(500).json({
-            error: "Failed to retrieve job status"
+            error: "Failed to retrieve job history"
         });
     }
 });
