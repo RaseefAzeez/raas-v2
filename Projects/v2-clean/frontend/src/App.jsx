@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
+import { signInWithRedirect, signOut, getCurrentUser } from './auth'
 
 const sampleInstances = [
   { id: 'i-0a12bc34de56f7890', name: 'raas-api-prod', type: 't3.medium', status: 'Running', zone: 'ap-south-1a', team: 'Platform' },
@@ -33,12 +34,60 @@ function MetricCard({ label, value, detail, icon, accent }) {
 
 function App() {
   const [showLogin, setShowLogin] = useState(true)
+  const [currentUser, setCurrentUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authError, setAuthError] = useState('')
   const [activeNav, setActiveNav] = useState('My instances')
   const [jobs, setJobs] = useState([])
   const [readiness, setReadiness] = useState({ state: 'Checking', redis: 'unknown' })
   const [notice, setNotice] = useState('')
   const [submitting, setSubmitting] = useState('')
   const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    let active = true
+
+    getCurrentUser()
+      .then(user => {
+        if (active) {
+          setCurrentUser(user)
+          setShowLogin(false)
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setCurrentUser(null)
+          setShowLogin(true)
+        }
+      })
+      .finally(() => {
+        if (active) setAuthLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  async function handleSignIn() {
+    setAuthError('')
+    try {
+      await signInWithRedirect()
+    } catch (error) {
+      setAuthError(error.message || 'Unable to start Cognito sign-in.')
+    }
+  }
+
+  async function handleSignOut() {
+    setAuthError('')
+    try {
+      await signOut()
+      setCurrentUser(null)
+      setShowLogin(true)
+    } catch (error) {
+      setAuthError(error.message || 'Unable to sign out.')
+    }
+  }
 
   const refreshReadiness = useCallback(async () => {
     try {
@@ -139,7 +188,15 @@ function App() {
     return sampleInstances.filter(instance => [instance.name, instance.id, instance.type, instance.status, instance.zone, instance.team].some(value => value.toLowerCase().includes(query)))
   }, [search])
   const redisHealthy = readiness.redis === 'available'
-  if (showLogin) {
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#080d18] text-slate-300">
+        Checking sign-in session…
+      </div>
+    )
+  }
+
+  if (showLogin || !currentUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#080d18] px-5 text-slate-200">
         <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1120] p-8 shadow-2xl">
@@ -165,20 +222,25 @@ function App() {
               Demo environment
             </p>
             <p className="mt-1 text-xs leading-5 text-slate-400">
-              Secure authentication is not configured yet. Demo access does not
-              verify your identity.
+              Sign in securely with Amazon Cognito. Inventory and restart operations remain demo-only.
             </p>
           </div>
 
           <button
-            onClick={() => setShowLogin(false)}
+            onClick={handleSignIn}
             className="mt-6 w-full rounded-xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
           >
-            Continue to demo
+            Sign in with Amazon Cognito
           </button>
 
+          {authError && (
+            <p role="alert" className="mt-3 text-sm text-rose-300">
+              {authError}
+            </p>
+          )}
+
           <p className="mt-5 text-center text-xs text-slate-500">
-            AWS Cognito integration pending
+            Cognito authentication · Demo operations only
           </p>
         </div>
       </div>
@@ -189,11 +251,11 @@ function App() {
     <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-white/[0.08] bg-[#0b1120] lg:flex">
       <div className="flex h-20 items-center gap-3 border-b border-white/[0.08] px-6"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-400 text-lg font-black text-slate-950">R</div><div><p className="font-semibold tracking-wide text-white">RaaS <span className="text-cyan-400">2.0</span></p><p className="text-xs text-slate-500">Reboot as a Service</p></div></div>
       <div className="px-4 pt-7">{['User portal', 'Operations'].map(group => <div key={group} className="mb-5"><p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-600">{group}</p><nav className="space-y-1">{navItems.filter(item => item.group === group).map(item => <button key={item.label} onClick={() => setActiveNav(item.label)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${activeNav === item.label ? 'bg-cyan-400/10 font-medium text-cyan-300 ring-1 ring-cyan-400/20' : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'}`}><span className="w-5 text-center text-lg">{item.icon}</span>{item.label}</button>)}</nav></div>)}</div>
-      <div className="mt-auto border-t border-white/[0.08] p-5"><div className="rounded-xl border border-violet-400/20 bg-violet-400/[0.06] p-3"><div className="flex items-center gap-2 text-xs font-semibold text-violet-300">◈ DEMO ENVIRONMENT</div><p className="mt-2 text-xs leading-5 text-slate-500">Sample inventory and simulated operations. Authentication and AWS actions are not configured.</p></div></div>
+      <div className="mt-auto border-t border-white/[0.08] p-5"><div className="rounded-xl border border-violet-400/20 bg-violet-400/[0.06] p-3"><div className="flex items-center gap-2 text-xs font-semibold text-violet-300">◈ DEMO ENVIRONMENT</div><p className="mt-2 text-xs leading-5 text-slate-500">Cognito sign-in enabled. Sample inventory and simulated operations only; real AWS actions are not connected.</p></div></div>
     </aside>
 
     <main className="lg:ml-64">
-      <header className="flex min-h-20 flex-wrap items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4 sm:px-8"><div><p className="text-xs text-slate-500">RaaS workspace / {activeNav}</p><h1 className="mt-1 text-xl font-semibold text-white">{activeNav}</h1></div><div className="flex items-center gap-3"><span className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-xs text-amber-300"><span className="h-2 w-2 rounded-full bg-amber-400" />Local development</span><div className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-slate-800 text-sm font-semibold text-white">R</div></div></header>
+      <header className="flex min-h-20 flex-wrap items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4 sm:px-8"><div><p className="text-xs text-slate-500">RaaS workspace / {activeNav}</p><h1 className="mt-1 text-xl font-semibold text-white">{activeNav}</h1></div><div className="flex flex-wrap items-center gap-3"><span className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-xs text-amber-300"><span className="h-2 w-2 rounded-full bg-amber-400" />Local development</span><span className="text-xs text-slate-400">{currentUser?.signInDetails?.loginId || currentUser?.username || 'Signed in'}</span><button onClick={handleSignOut} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.04]">Sign out</button></div></header>
       <div className="space-y-8 p-5 sm:p-8">
         {notice && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-400/20 bg-cyan-400/[0.06] px-4 py-3 text-sm text-cyan-100"><span>{notice}</span><button onClick={() => setNotice('')} className="shrink-0 text-cyan-300 hover:text-white">Dismiss</button></div>}
 
@@ -212,7 +274,7 @@ function App() {
         </>}
 
         {activeNav === 'Job history' && <section><div className="mb-5"><h2 className="text-xl font-semibold text-white">Shared job history</h2><p className="mt-1 text-sm text-slate-500">Job history retrieved from the shared BullMQ queue while job records remain available.</p></div><JobTable jobs={jobs} /></section>}
-        <footer className="flex flex-col justify-between gap-2 border-t border-white/[0.08] pt-5 text-xs text-slate-600 sm:flex-row"><p>RaaS 2.0 · Reboot as a Service</p><p>Real API/queue workflow · Mock inventory/operations · No authentication configured</p></footer>
+        <footer className="flex flex-col justify-between gap-2 border-t border-white/[0.08] pt-5 text-xs text-slate-600 sm:flex-row"><p>RaaS 2.0 · Reboot as a Service</p><p>Cognito authentication · Real API/queue workflow · Mock inventory/operations</p></footer>
       </div>
     </main>
   </div>
