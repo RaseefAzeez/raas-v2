@@ -32,6 +32,7 @@ function MetricCard({ label, value, detail, icon, accent }) {
 }
 
 function App() {
+  const [showLogin, setShowLogin] = useState(true)
   const [activeNav, setActiveNav] = useState('My instances')
   const [jobs, setJobs] = useState([])
   const [readiness, setReadiness] = useState({ state: 'Checking', redis: 'unknown' })
@@ -138,6 +139,51 @@ function App() {
     return sampleInstances.filter(instance => [instance.name, instance.id, instance.type, instance.status, instance.zone, instance.team].some(value => value.toLowerCase().includes(query)))
   }, [search])
   const redisHealthy = readiness.redis === 'available'
+  if (showLogin) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#080d18] px-5 text-slate-200">
+        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1120] p-8 shadow-2xl">
+          <div className="mb-8 flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-400 text-xl font-black text-slate-950">
+              R
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold text-white">
+                RaaS <span className="text-cyan-400">2.0</span>
+              </h1>
+              <p className="text-sm text-slate-400">Reboot as a Service</p>
+            </div>
+          </div>
+
+          <h2 className="text-2xl font-semibold text-white">Welcome back</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            Self-service cloud operations, simplified.
+          </p>
+
+          <div className="mt-6 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4">
+            <p className="text-sm font-medium text-amber-300">
+              Demo environment
+            </p>
+            <p className="mt-1 text-xs leading-5 text-slate-400">
+              Secure authentication is not configured yet. Demo access does not
+              verify your identity.
+            </p>
+          </div>
+
+          <button
+            onClick={() => setShowLogin(false)}
+            className="mt-6 w-full rounded-xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
+          >
+            Continue to demo
+          </button>
+
+          <p className="mt-5 text-center text-xs text-slate-500">
+            AWS Cognito integration pending
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return <div className="min-h-screen bg-[#080d18] text-slate-200">
     <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-white/[0.08] bg-[#0b1120] lg:flex">
