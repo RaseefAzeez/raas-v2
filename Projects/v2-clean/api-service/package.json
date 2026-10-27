@@ -12,6 +12,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "aws-jwt-verify": "^5.2.1",
     "bullmq": "^6.3.11",
     "express": "^5.2.1",
     "ioredis": "^6.0.0"

@@ -2,6 +2,10 @@
 const Redis = require("ioredis");
 const express = require("express");
 const { operationQueue } = require("./operationQueue");
+const {
+    authenticateToken,
+    requireAdmin
+} = require("./middleware/auth");
 
 const app = express();
 const PORT = 3000;
@@ -22,14 +26,13 @@ healthRedis.on("error", (error) => {
 
 app.use(express.json());
 
-// Liveness: is the API process responding?
+// Public health endpoints for Kubernetes probes.
 app.get("/health/live", (req, res) => {
     res.status(200).json({
         status: "alive"
     });
 });
 
-// Readiness: can the API reach Redis?
 app.get("/health/ready", async (req, res) => {
     let timeout;
 
@@ -60,14 +63,14 @@ app.get("/health/ready", async (req, res) => {
     }
 });
 
-
 app.get("/health", (req, res) => {
     res.status(200).json({
         status: "healthy"
     });
 });
 
-app.post("/reboot", async (req, res) => {
+// Reboot requests require a valid Cognito access token.
+app.post("/reboot", authenticateToken, async (req, res) => {
     try {
         const { instanceId } = req.body;
 
@@ -79,13 +82,14 @@ app.post("/reboot", async (req, res) => {
 
         const job = await operationQueue.add("reboot", {
             action: "REBOOT",
-            instanceId: instanceId
+            instanceId,
+            requestedBy: req.user.id
         });
 
         res.status(202).json({
             message: "Reboot job accepted",
             jobId: job.id,
-            instanceId: instanceId
+            instanceId
         });
     } catch (error) {
         console.error("Failed to enqueue job:", error.message);
@@ -96,8 +100,60 @@ app.post("/reboot", async (req, res) => {
     }
 });
 
+// Users can view the status of their own jobs.
+// Administrators can also view jobs belonging to other users.
+app.get(
+    "/jobs/:jobId/status",
+    authenticateToken,
+    async (req, res) => {
+        try {
+            const job = await operationQueue.getJob(req.params.jobId);
 
-app.get("/jobs", async (req, res) => {
+            if (!job) {
+                return res.status(404).json({
+                    error: "Job not found"
+                });
+            }
+
+            const isAdmin = req.user.groups.includes("RaaS-Admins");
+            const isOwner = job.data.requestedBy === req.user.id;
+
+            if (!isOwner && !isAdmin) {
+                return res.status(403).json({
+                    error: "You are not authorized to view this job"
+                });
+            }
+
+            const status = await job.getState();
+
+            return res.status(200).json({
+                jobId: job.id,
+                instanceId: job.data.instanceId,
+                action: job.data.action,
+                status,
+                timestamp: job.timestamp,
+                finishedOn: job.finishedOn ?? null,
+                result:
+                    status === "completed"
+                        ? job.returnvalue
+                        : undefined,
+                error:
+                    status === "failed"
+                        ? job.failedReason
+                        : undefined
+            });
+        } catch (error) {
+            console.error("Failed to retrieve job status:", error.message);
+
+            return res.status(500).json({
+                error: "Failed to retrieve job status"
+            });
+        }
+    }
+);
+
+// Job history is restricted to members of the RaaS-Admins group.
+app.get("/jobs", authenticateToken, requireAdmin, async (req, res) => {
     try {
         const states = [
             "waiting",
@@ -155,7 +211,6 @@ app.get("/jobs", async (req, res) => {
         });
     }
 });
-
 
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`API server running on port ${PORT}`);

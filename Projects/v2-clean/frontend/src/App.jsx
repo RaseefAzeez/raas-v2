@@ -1,21 +1,115 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { signInWithRedirect, signOut, getCurrentUser } from './auth'
+import {
+  signInWithRedirect,
+  signOut,
+  getCurrentUser,
+  fetchAuthSession,
+} from './auth'
 
 const sampleInstances = [
-  { id: 'i-0a12bc34de56f7890', name: 'raas-api-prod', type: 't3.medium', status: 'Running', zone: 'ap-south-1a', team: 'Platform' },
-  { id: 'i-0c34de56fa78b9012', name: 'analytics-dev', type: 't3.micro', status: 'Stopped', zone: 'ap-south-1a', team: 'Analytics' },
+  {
+    id: 'i-0a12bc34de56f7890',
+    name: 'raas-api-prod',
+    type: 't3.medium',
+    status: 'Running',
+    zone: 'ap-south-1a',
+    team: 'Platform',
+  },
+  {
+    id: 'i-0c34de56fa78b9012',
+    name: 'analytics-dev',
+    type: 't3.micro',
+    status: 'Stopped',
+    zone: 'ap-south-1a',
+    team: 'Analytics',
+  },
 ]
+
+async function authenticatedFetch(url, options = {}) {
+  const session = await fetchAuthSession()
+  const accessToken = session.tokens?.accessToken?.toString()
+
+  if (!accessToken) {
+    throw new Error('Your session has expired. Please sign in again.')
+  }
+
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      Authorization: `Bearer ${accessToken}`,
+    },
+  })
+}
+
+function getUserIdentity(user) {
+  return user?.userId || user?.username || user?.signInDetails?.loginId || ''
+}
+
+function getJobStorageKey(user) {
+  const identity = getUserIdentity(user)
+  return identity ? `raas.myJobIds.${identity}` : ''
+}
+
+function readSavedJobIds(user) {
+  const key = getJobStorageKey(user)
+
+  if (!key) return []
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || '[]')
+    return Array.isArray(saved) ? saved.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+function saveJobId(user, jobId, existingIds) {
+  const key = getJobStorageKey(user)
+  const nextIds = [...new Set([...existingIds, String(jobId)])]
+
+  if (key) {
+    try {
+      localStorage.setItem(key, JSON.stringify(nextIds))
+    } catch (error) {
+      console.error('Unable to save job history locally:', error.message)
+    }
+  }
+
+  return nextIds
+}
+
+function formatJob(job) {
+  return {
+    id: String(job.jobId),
+    instance: job.instanceId || 'Unknown instance',
+    action:
+      job.action === 'REBOOT'
+        ? 'Simulated restart'
+        : job.action || 'Operation',
+    status: job.status || 'Unknown',
+    time: job.timestamp
+      ? new Date(job.timestamp).toLocaleTimeString()
+      : '—',
+    result: job.result,
+    error: job.error,
+  }
+}
 
 function StatusBadge({ status }) {
   const styles = {
     Healthy: 'bg-emerald-400/10 text-emerald-400 ring-emerald-400/20',
     Running: 'bg-emerald-400/10 text-emerald-400 ring-emerald-400/20',
     Completed: 'bg-emerald-400/10 text-emerald-400 ring-emerald-400/20',
+    completed: 'bg-emerald-400/10 text-emerald-400 ring-emerald-400/20',
     ready: 'bg-emerald-400/10 text-emerald-400 ring-emerald-400/20',
     active: 'bg-cyan-400/10 text-cyan-300 ring-cyan-400/20',
     waiting: 'bg-amber-400/10 text-amber-300 ring-amber-400/20',
-    'waiting-children': 'bg-amber-400/10 text-amber-300 ring-amber-400/20',
+    delayed: 'bg-amber-400/10 text-amber-300 ring-amber-400/20',
+    'waiting-children':
+      'bg-amber-400/10 text-amber-300 ring-amber-400/20',
+    paused: 'bg-amber-400/10 text-amber-300 ring-amber-400/20',
     Degraded: 'bg-amber-400/10 text-amber-300 ring-amber-400/20',
     Checking: 'bg-amber-400/10 text-amber-300 ring-amber-400/20',
     Stopped: 'bg-slate-400/10 text-slate-300 ring-slate-400/20',
@@ -24,12 +118,38 @@ function StatusBadge({ status }) {
     Unavailable: 'bg-rose-400/10 text-rose-400 ring-rose-400/20',
     'not found': 'bg-rose-400/10 text-rose-400 ring-rose-400/20',
     'Not monitored': 'bg-slate-400/10 text-slate-300 ring-slate-400/20',
+    Unknown: 'bg-slate-400/10 text-slate-300 ring-slate-400/20',
   }
-  return <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${styles[status] || 'bg-slate-400/10 text-slate-300 ring-slate-400/20'}`}><span className="mr-1.5">●</span>{status === 'ready' ? 'Ready' : status}</span>
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${styles[status] ||
+        'bg-slate-400/10 text-slate-300 ring-slate-400/20'
+        }`}
+    >
+      <span className="mr-1.5">●</span>
+      {status === 'ready' ? 'Ready' : status}
+    </span>
+  )
 }
 
 function MetricCard({ label, value, detail, icon, accent }) {
-  return <div className="rounded-2xl border border-white/[0.08] bg-slate-900/70 p-5"><div className="flex items-center justify-between"><p className="text-sm text-slate-400">{label}</p><span className={`flex h-10 w-10 items-center justify-center rounded-xl ${accent}`}>{icon}</span></div><p className="mt-4 text-3xl font-semibold tracking-tight text-white">{value}</p><p className="mt-2 text-xs text-slate-500">{detail}</p></div>
+  return (
+    <div className="rounded-2xl border border-white/[0.08] bg-slate-900/70 p-5">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-slate-400">{label}</p>
+        <span
+          className={`flex h-10 w-10 items-center justify-center rounded-xl ${accent}`}
+        >
+          {icon}
+        </span>
+      </div>
+      <p className="mt-4 text-3xl font-semibold tracking-tight text-white">
+        {value}
+      </p>
+      <p className="mt-2 text-xs text-slate-500">{detail}</p>
+    </div>
+  )
 }
 
 function App() {
@@ -39,30 +159,47 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [activeNav, setActiveNav] = useState('My instances')
   const [jobs, setJobs] = useState([])
-  const [readiness, setReadiness] = useState({ state: 'Checking', redis: 'unknown' })
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [myJobIds, setMyJobIds] = useState([])
+  const [readiness, setReadiness] = useState({
+    state: 'Checking',
+    redis: 'unknown',
+  })
   const [notice, setNotice] = useState('')
   const [submitting, setSubmitting] = useState('')
   const [search, setSearch] = useState('')
 
+  // Restore the signed-in user, Cognito group membership and personal job IDs.
   useEffect(() => {
     let active = true
 
-    getCurrentUser()
-      .then(user => {
-        if (active) {
-          setCurrentUser(user)
-          setShowLogin(false)
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setCurrentUser(null)
-          setShowLogin(true)
-        }
-      })
-      .finally(() => {
+    async function restoreSession() {
+      try {
+        const user = await getCurrentUser()
+        const session = await fetchAuthSession()
+        const groups =
+          session.tokens?.idToken?.payload?.['cognito:groups'] || []
+
+        if (!active) return
+
+        setCurrentUser(user)
+        setIsAdmin(groups.includes('RaaS-Admins'))
+        setMyJobIds(readSavedJobIds(user))
+        setActiveNav('My instances')
+        setShowLogin(false)
+      } catch {
+        if (!active) return
+
+        setCurrentUser(null)
+        setIsAdmin(false)
+        setMyJobIds([])
+        setShowLogin(true)
+      } finally {
         if (active) setAuthLoading(false)
-      })
+      }
+    }
+
+    restoreSession()
 
     return () => {
       active = false
@@ -71,6 +208,7 @@ function App() {
 
   async function handleSignIn() {
     setAuthError('')
+
     try {
       await signInWithRedirect()
     } catch (error) {
@@ -80,9 +218,14 @@ function App() {
 
   async function handleSignOut() {
     setAuthError('')
+
     try {
       await signOut()
       setCurrentUser(null)
+      setIsAdmin(false)
+      setMyJobIds([])
+      setJobs([])
+      setActiveNav('My instances')
       setShowLogin(true)
     } catch (error) {
       setAuthError(error.message || 'Unable to sign out.')
@@ -93,58 +236,126 @@ function App() {
     try {
       const response = await fetch('/api/health/ready')
       const data = await response.json()
+
       if (!response.ok) {
-        setReadiness({ state: 'Degraded', redis: data.redis || 'unknown' })
+        setReadiness({
+          state: 'Degraded',
+          redis: data.redis || 'unknown',
+        })
         return
       }
-      setReadiness({ state: data.status === 'ready' ? 'Healthy' : 'Degraded', redis: data.redis || 'unknown' })
+
+      setReadiness({
+        state: data.status === 'ready' ? 'Healthy' : 'Degraded',
+        redis: data.redis || 'unknown',
+      })
     } catch {
-      setReadiness({ state: 'Unavailable', redis: 'unknown' })
+      setReadiness({
+        state: 'Unavailable',
+        redis: 'unknown',
+      })
     }
   }, [])
 
+  // Admins retrieve shared history. Regular users retrieve only their own jobs.
   const refreshJobs = useCallback(async () => {
-    try {
-      const response = await fetch('/api/jobs')
+    if (!currentUser) return
 
-      if (!response.ok) {
-        throw new Error(`Job history request failed (${response.status})`)
+    if (!isAdmin && myJobIds.length === 0) {
+      setJobs([])
+      return
+    }
+
+    try {
+      if (isAdmin) {
+        const response = await authenticatedFetch('/api/jobs')
+
+        if (!response.ok) {
+          throw new Error(
+            `Job history request failed (${response.status})`
+          )
+        }
+
+        const data = await response.json()
+        setJobs((data.jobs || []).map(formatJob))
+        return
       }
 
-      const data = await response.json()
+      const statuses = await Promise.all(
+        myJobIds.map(async jobId => {
+          try {
+            const response = await authenticatedFetch(
+              `/api/jobs/${encodeURIComponent(jobId)}/status`
+            )
 
-      const history = (data.jobs || []).map(job => ({
-        id: String(job.jobId),
-        instance: job.instanceId || 'Unknown instance',
-        action: job.action === 'REBOOT'
-          ? 'Simulated restart'
-          : job.action || 'Operation',
-        status: job.status,
-        time: job.timestamp
-          ? new Date(job.timestamp).toLocaleTimeString()
-          : '—',
-        result: job.result,
-        error: job.error
-      }))
+            if (response.status === 404) {
+              return {
+                jobId,
+                instanceId: 'Unknown instance',
+                action: 'Operation',
+                status: 'not found',
+              }
+            }
 
-      setJobs(history)
+            if (!response.ok) {
+              throw new Error(
+                `Job ${jobId} status request failed (${response.status})`
+              )
+            }
+
+            return await response.json()
+          } catch (error) {
+            console.error(
+              `Unable to refresh job ${jobId}:`,
+              error.message
+            )
+
+            return {
+              jobId,
+              instanceId: 'Unknown instance',
+              action: 'Operation',
+              status: 'Unavailable',
+              error: error.message,
+            }
+          }
+        })
+      )
+
+      setJobs(statuses.map(formatJob))
     } catch (error) {
-      console.error('Failed to refresh job history:', error.message)
+      console.error('Failed to refresh jobs:', error.message)
     }
-  }, [])
+  }, [currentUser, isAdmin, myJobIds])
 
   useEffect(() => {
+    if (authLoading || !currentUser || showLogin) return
+
     refreshReadiness()
+
     const interval = setInterval(refreshReadiness, 10000)
+
     return () => clearInterval(interval)
-  }, [refreshReadiness])
+  }, [
+    authLoading,
+    currentUser,
+    showLogin,
+    refreshReadiness,
+  ])
 
   useEffect(() => {
+    if (authLoading || !currentUser || showLogin) return
+
     refreshJobs()
 
     const interval = setInterval(refreshJobs, 3000)
+
     return () => clearInterval(interval)
-  }, [refreshJobs])
+  }, [
+    authLoading,
+    currentUser,
+    showLogin,
+    refreshJobs,
+  ])
 
   async function submitReboot(instance) {
     if (submitting) return
@@ -153,23 +364,46 @@ function App() {
     setNotice('Submitting simulated restart job…')
 
     try {
-      const response = await fetch('/api/reboot', {
+      const response = await authenticatedFetch('/api/reboot', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceId: instance.id }),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          instanceId: instance.id,
+        }),
       })
 
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || `Request failed (${response.status})`)
+        throw new Error(
+          data.error || `Request failed (${response.status})`
+        )
       }
 
-      setNotice(
-        `Job ${data.jobId} accepted for ${data.instanceId || instance.id}. This is a mock operation; no AWS instance is restarted.`
+      if (!data.jobId) {
+        throw new Error('The API did not return a job ID.')
+      }
+
+      const nextIds = saveJobId(
+        currentUser,
+        data.jobId,
+        myJobIds
       )
 
-      await refreshJobs()
+      setMyJobIds(nextIds)
+
+      setNotice(
+        `Job ${data.jobId} accepted for ${data.instanceId || instance.id
+        }. This is a mock operation; no AWS instance is restarted.`
+      )
+
+      // The next polling cycle will retrieve the new job using the updated ID.
+      // Admins can also refresh the shared history immediately.
+      if (isAdmin) {
+        await refreshJobs()
+      }
     } catch (error) {
       setNotice(`Failed to submit restart job: ${error.message}`)
     } finally {
@@ -178,16 +412,46 @@ function App() {
   }
 
   const navItems = [
-    { label: 'My instances', icon: '▦', group: 'User portal' },
-    { label: 'Admin overview', icon: '◫', group: 'Operations' },
-    { label: 'Job history', icon: '≡', group: 'Operations' },
+    {
+      label: 'My instances',
+      icon: '▦',
+      group: 'User portal',
+    },
+    ...(isAdmin
+      ? [
+        {
+          label: 'Admin overview',
+          icon: '◫',
+          group: 'Operations',
+        },
+        {
+          label: 'Job history',
+          icon: '≡',
+          group: 'Operations',
+        },
+      ]
+      : []),
   ]
+
   const filteredInstances = useMemo(() => {
     const query = search.trim().toLowerCase()
+
     if (!query) return sampleInstances
-    return sampleInstances.filter(instance => [instance.name, instance.id, instance.type, instance.status, instance.zone, instance.team].some(value => value.toLowerCase().includes(query)))
+
+    return sampleInstances.filter(instance =>
+      [
+        instance.name,
+        instance.id,
+        instance.type,
+        instance.status,
+        instance.zone,
+        instance.team,
+      ].some(value => value.toLowerCase().includes(query))
+    )
   }, [search])
+
   const redisHealthy = readiness.redis === 'available'
+
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#080d18] text-slate-300">
@@ -204,15 +468,21 @@ function App() {
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-400 text-xl font-black text-slate-950">
               R
             </div>
+
             <div>
               <h1 className="text-xl font-semibold text-white">
                 RaaS <span className="text-cyan-400">2.0</span>
               </h1>
-              <p className="text-sm text-slate-400">Reboot as a Service</p>
+              <p className="text-sm text-slate-400">
+                Reboot as a Service
+              </p>
             </div>
           </div>
 
-          <h2 className="text-2xl font-semibold text-white">Welcome back</h2>
+          <h2 className="text-2xl font-semibold text-white">
+            Welcome back
+          </h2>
+
           <p className="mt-2 text-sm leading-6 text-slate-400">
             Self-service cloud operations, simplified.
           </p>
@@ -222,7 +492,8 @@ function App() {
               Demo environment
             </p>
             <p className="mt-1 text-xs leading-5 text-slate-400">
-              Sign in securely with Amazon Cognito. Inventory and restart operations remain demo-only.
+              Sign in securely with Amazon Cognito. Inventory and
+              restart operations remain demo-only.
             </p>
           </div>
 
@@ -247,50 +518,582 @@ function App() {
     )
   }
 
-  return <div className="min-h-screen bg-[#080d18] text-slate-200">
-    <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-white/[0.08] bg-[#0b1120] lg:flex">
-      <div className="flex h-20 items-center gap-3 border-b border-white/[0.08] px-6"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-400 text-lg font-black text-slate-950">R</div><div><p className="font-semibold tracking-wide text-white">RaaS <span className="text-cyan-400">2.0</span></p><p className="text-xs text-slate-500">Reboot as a Service</p></div></div>
-      <div className="px-4 pt-7">{['User portal', 'Operations'].map(group => <div key={group} className="mb-5"><p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-600">{group}</p><nav className="space-y-1">{navItems.filter(item => item.group === group).map(item => <button key={item.label} onClick={() => setActiveNav(item.label)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${activeNav === item.label ? 'bg-cyan-400/10 font-medium text-cyan-300 ring-1 ring-cyan-400/20' : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'}`}><span className="w-5 text-center text-lg">{item.icon}</span>{item.label}</button>)}</nav></div>)}</div>
-      <div className="mt-auto border-t border-white/[0.08] p-5"><div className="rounded-xl border border-violet-400/20 bg-violet-400/[0.06] p-3"><div className="flex items-center gap-2 text-xs font-semibold text-violet-300">◈ DEMO ENVIRONMENT</div><p className="mt-2 text-xs leading-5 text-slate-500">Cognito sign-in enabled. Sample inventory and simulated operations only; real AWS actions are not connected.</p></div></div>
-    </aside>
+  return (
+    <div className="min-h-screen bg-[#080d18] text-slate-200">
+      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-white/[0.08] bg-[#0b1120] lg:flex">
+        <div className="flex h-20 items-center gap-3 border-b border-white/[0.08] px-6">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-400 text-lg font-black text-slate-950">
+            R
+          </div>
 
-    <main className="lg:ml-64">
-      <header className="flex min-h-20 flex-wrap items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4 sm:px-8"><div><p className="text-xs text-slate-500">RaaS workspace / {activeNav}</p><h1 className="mt-1 text-xl font-semibold text-white">{activeNav}</h1></div><div className="flex flex-wrap items-center gap-3"><span className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-xs text-amber-300"><span className="h-2 w-2 rounded-full bg-amber-400" />Local development</span><span className="text-xs text-slate-400">{currentUser?.signInDetails?.loginId || currentUser?.username || 'Signed in'}</span><button onClick={handleSignOut} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.04]">Sign out</button></div></header>
-      <div className="space-y-8 p-5 sm:p-8">
-        {notice && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-400/20 bg-cyan-400/[0.06] px-4 py-3 text-sm text-cyan-100"><span>{notice}</span><button onClick={() => setNotice('')} className="shrink-0 text-cyan-300 hover:text-white">Dismiss</button></div>}
+          <div>
+            <p className="font-semibold tracking-wide text-white">
+              RaaS <span className="text-cyan-400">2.0</span>
+            </p>
+            <p className="text-xs text-slate-500">
+              Reboot as a Service
+            </p>
+          </div>
+        </div>
 
-        {activeNav === 'My instances' && <>
-          <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end"><div><p className="text-sm text-slate-400">Self-service infrastructure</p><h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Your instances<span className="text-cyan-400">.</span></h2><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">View sample instances and submit a simulated restart request. Real team authorization and AWS inventory are not connected yet.</p></div><span className="w-fit rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-400">Inventory: <span className="font-medium text-white">Sample data</span></span></section>
-          <section className="grid gap-4 sm:grid-cols-3"><MetricCard label="Visible instances" value={sampleInstances.length} detail="Sample inventory" icon="▦" accent="bg-cyan-400/10 text-cyan-300" /><MetricCard label="Running" value={sampleInstances.filter(instance => instance.status === 'Running').length} detail="Sample state" icon="●" accent="bg-emerald-400/10 text-emerald-300" /><MetricCard label="Stopped" value={sampleInstances.filter(instance => instance.status === 'Stopped').length} detail="Sample state" icon="Ⅱ" accent="bg-slate-400/10 text-slate-300" /></section>
-          <InstanceTable instances={filteredInstances} search={search} onSearch={setSearch} onReboot={submitReboot} submitting={submitting} />
-          <JobTable jobs={jobs.slice(0, 5)} />
-        </>}
+        <div className="px-4 pt-7">
+          {['User portal', ...(isAdmin ? ['Operations'] : [])].map(
+            group => (
+              <div key={group} className="mb-5">
+                <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-600">
+                  {group}
+                </p>
 
-        {activeNav === 'Admin overview' && <>
-          <section><p className="text-sm text-slate-400">RaaS service observability</p><h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Operations overview<span className="text-cyan-400">.</span></h2><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Monitor API readiness and API-reported Redis connectivity. Worker health is not independently exposed yet.</p></section>
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label="Tracked jobs" value={jobs.length} detail="Jobs returned by the API" icon="▦" accent="bg-cyan-400/10 text-cyan-300" /><MetricCard label="Completed" value={jobs.filter(job => job.status === 'completed').length} detail="Reported by BullMQ API" icon="↗" accent="bg-emerald-400/10 text-emerald-300" /><MetricCard label="In progress" value={jobs.filter(job => ['waiting', 'active', 'delayed', 'waiting-children'].includes(job.status)).length} detail="Reported by BullMQ API" icon="ϟ" accent="bg-violet-400/10 text-violet-300" /><MetricCard label="Failed / missing" value={jobs.filter(job => ['failed', 'not found'].includes(job.status)).length} detail="Reported by API" icon="!" accent="bg-rose-400/10 text-rose-300" /></section>
-          <section><div className="mb-4 flex items-center justify-between"><div><h3 className="font-semibold text-white">Service health</h3><p className="mt-1 text-xs text-slate-500">Live API readiness endpoint; Redis status is inferred from its response.</p></div><button onClick={refreshReadiness} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.04]">Refresh health</button></div><div className="grid gap-4 md:grid-cols-3">{[{ name: 'API readiness', desc: 'GET /api/health/ready', status: readiness.state }, { name: 'Redis dependency', desc: 'API-reported connectivity', status: redisHealthy ? 'Healthy' : readiness.state === 'Checking' ? 'Checking' : 'Degraded' }, { name: 'Worker service', desc: 'No dedicated health endpoint yet', status: 'Not monitored' }].map(service => <div key={service.name} className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-5"><div className="flex items-start justify-between"><span className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-lg text-cyan-300">◈</span><StatusBadge status={service.status} /></div><h4 className="mt-5 font-medium text-white">{service.name}</h4><p className="mt-1 text-xs text-slate-500">{service.desc}</p></div>)}</div></section>
-          <JobTable jobs={jobs.slice(0, 8)} />
-        </>}
+                <nav className="space-y-1">
+                  {navItems
+                    .filter(item => item.group === group)
+                    .map(item => (
+                      <button
+                        key={item.label}
+                        onClick={() => setActiveNav(item.label)}
+                        className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${activeNav === item.label
+                          ? 'bg-cyan-400/10 font-medium text-cyan-300 ring-1 ring-cyan-400/20'
+                          : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'
+                          }`}
+                      >
+                        <span className="w-5 text-center text-lg">
+                          {item.icon}
+                        </span>
+                        {item.label}
+                      </button>
+                    ))}
+                </nav>
+              </div>
+            )
+          )}
+        </div>
 
-        {activeNav === 'Job history' && <section><div className="mb-5"><h2 className="text-xl font-semibold text-white">Shared job history</h2><p className="mt-1 text-sm text-slate-500">Job history retrieved from the shared BullMQ queue while job records remain available.</p></div><JobTable jobs={jobs} /></section>}
-        <footer className="flex flex-col justify-between gap-2 border-t border-white/[0.08] pt-5 text-xs text-slate-600 sm:flex-row"><p>RaaS 2.0 · Reboot as a Service</p><p>Cognito authentication · Real API/queue workflow · Mock inventory/operations</p></footer>
+        <div className="mt-auto border-t border-white/[0.08] p-5">
+          <div className="rounded-xl border border-violet-400/20 bg-violet-400/[0.06] p-3">
+            <div className="flex items-center gap-2 text-xs font-semibold text-violet-300">
+              ◈ DEMO ENVIRONMENT
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              Cognito authentication enabled. Sample inventory and
+              simulated operations only; real AWS actions are not
+              connected.
+            </p>
+          </div>
+        </div>
+      </aside>
+
+      <main className="lg:ml-64">
+        <header className="flex min-h-20 flex-wrap items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4 sm:px-8">
+          <div>
+            <p className="text-xs text-slate-500">
+              RaaS workspace / {activeNav}
+            </p>
+            <h1 className="mt-1 text-xl font-semibold text-white">
+              {activeNav}
+            </h1>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-xs text-amber-300">
+              <span className="h-2 w-2 rounded-full bg-amber-400" />
+              Local development
+            </span>
+
+            <span className="text-xs text-slate-400">
+              {currentUser?.signInDetails?.loginId ||
+                currentUser?.username ||
+                'Signed in'}
+            </span>
+
+            {isAdmin && (
+              <span className="rounded-full border border-violet-400/20 bg-violet-400/[0.06] px-3 py-2 text-xs text-violet-300">
+                Administrator
+              </span>
+            )}
+
+            <button
+              onClick={handleSignOut}
+              className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.04]"
+            >
+              Sign out
+            </button>
+          </div>
+        </header>
+
+        <div className="space-y-8 p-5 sm:p-8">
+          {notice && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-400/20 bg-cyan-400/[0.06] px-4 py-3 text-sm text-cyan-100"
+            >
+              <span>{notice}</span>
+              <button
+                onClick={() => setNotice('')}
+                className="shrink-0 text-cyan-300 hover:text-white"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {activeNav === 'My instances' && (
+            <>
+              <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
+                <div>
+                  <p className="text-sm text-slate-400">
+                    Self-service infrastructure
+                  </p>
+                  <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                    Your instances
+                    <span className="text-cyan-400">.</span>
+                  </h2>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+                    View sample instances and submit a simulated
+                    restart request. Real team authorization and AWS
+                    inventory are not connected yet.
+                  </p>
+                </div>
+
+                <span className="w-fit rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-400">
+                  Inventory:{' '}
+                  <span className="font-medium text-white">
+                    Sample data
+                  </span>
+                </span>
+              </section>
+
+              <section className="grid gap-4 sm:grid-cols-3">
+                <MetricCard
+                  label="Visible instances"
+                  value={sampleInstances.length}
+                  detail="Sample inventory"
+                  icon="▦"
+                  accent="bg-cyan-400/10 text-cyan-300"
+                />
+
+                <MetricCard
+                  label="Running"
+                  value={
+                    sampleInstances.filter(
+                      instance => instance.status === 'Running'
+                    ).length
+                  }
+                  detail="Sample state"
+                  icon="●"
+                  accent="bg-emerald-400/10 text-emerald-300"
+                />
+
+                <MetricCard
+                  label="Stopped"
+                  value={
+                    sampleInstances.filter(
+                      instance => instance.status === 'Stopped'
+                    ).length
+                  }
+                  detail="Sample state"
+                  icon="Ⅱ"
+                  accent="bg-slate-400/10 text-slate-300"
+                />
+              </section>
+
+              <InstanceTable
+                instances={filteredInstances}
+                search={search}
+                onSearch={setSearch}
+                onReboot={submitReboot}
+                submitting={submitting}
+              />
+
+              <JobTable
+                title="My recent operations"
+                description="Only jobs associated with your signed-in account are requested."
+                jobs={jobs.slice(0, 5)}
+              />
+            </>
+          )}
+
+          {isAdmin && activeNav === 'Admin overview' && (
+            <>
+              <section>
+                <p className="text-sm text-slate-400">
+                  RaaS service observability
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                  Operations overview
+                  <span className="text-cyan-400">.</span>
+                </h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+                  Monitor API readiness and API-reported Redis
+                  connectivity. Worker health is not independently
+                  exposed yet.
+                </p>
+              </section>
+
+              <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <MetricCard
+                  label="Tracked jobs"
+                  value={jobs.length}
+                  detail="Jobs returned by the API"
+                  icon="▦"
+                  accent="bg-cyan-400/10 text-cyan-300"
+                />
+
+                <MetricCard
+                  label="Completed"
+                  value={
+                    jobs.filter(job => job.status === 'completed')
+                      .length
+                  }
+                  detail="Reported by BullMQ API"
+                  icon="↗"
+                  accent="bg-emerald-400/10 text-emerald-300"
+                />
+
+                <MetricCard
+                  label="In progress"
+                  value={
+                    jobs.filter(job =>
+                      [
+                        'waiting',
+                        'active',
+                        'delayed',
+                        'waiting-children',
+                      ].includes(job.status)
+                    ).length
+                  }
+                  detail="Reported by BullMQ API"
+                  icon="ϟ"
+                  accent="bg-violet-400/10 text-violet-300"
+                />
+
+                <MetricCard
+                  label="Failed / missing"
+                  value={
+                    jobs.filter(job =>
+                      ['failed', 'not found', 'Unavailable'].includes(
+                        job.status
+                      )
+                    ).length
+                  }
+                  detail="Reported by API"
+                  icon="!"
+                  accent="bg-rose-400/10 text-rose-300"
+                />
+              </section>
+
+              <section>
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold text-white">
+                      Service health
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Live API readiness endpoint; Redis status is
+                      inferred from its response.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={refreshReadiness}
+                    className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.04]"
+                  >
+                    Refresh health
+                  </button>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  {[
+                    {
+                      name: 'API readiness',
+                      desc: 'GET /api/health/ready',
+                      status: readiness.state,
+                    },
+                    {
+                      name: 'Redis dependency',
+                      desc: 'API-reported connectivity',
+                      status: redisHealthy
+                        ? 'Healthy'
+                        : readiness.state === 'Checking'
+                          ? 'Checking'
+                          : 'Degraded',
+                    },
+                    {
+                      name: 'Worker service',
+                      desc: 'No dedicated health endpoint yet',
+                      status: 'Not monitored',
+                    },
+                  ].map(service => (
+                    <div
+                      key={service.name}
+                      className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-5"
+                    >
+                      <div className="flex items-start justify-between">
+                        <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-lg text-cyan-300">
+                          ◈
+                        </span>
+                        <StatusBadge status={service.status} />
+                      </div>
+
+                      <h4 className="mt-5 font-medium text-white">
+                        {service.name}
+                      </h4>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {service.desc}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <JobTable
+                title="Recent operations"
+                description="Shared job history from the BullMQ API."
+                jobs={jobs.slice(0, 8)}
+              />
+            </>
+          )}
+
+          {isAdmin && activeNav === 'Job history' && (
+            <section>
+              <div className="mb-5">
+                <h2 className="text-xl font-semibold text-white">
+                  Shared job history
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Job history retrieved from the shared BullMQ queue
+                  while records remain available.
+                </p>
+              </div>
+
+              <JobTable
+                title="All operations"
+                description="Shared queue history returned by the API."
+                jobs={jobs}
+              />
+            </section>
+          )}
+
+          <footer className="flex flex-col justify-between gap-2 border-t border-white/[0.08] pt-5 text-xs text-slate-600 sm:flex-row">
+            <p>RaaS 2.0 · Reboot as a Service</p>
+            <p>
+              Cognito authentication · Real API/queue workflow ·
+              Mock inventory/operations
+            </p>
+          </footer>
+        </div>
+      </main>
+    </div>
+  )
+}
+
+function InstanceTable({
+  instances,
+  search,
+  onSearch,
+  onReboot,
+  submitting,
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-white/[0.08] bg-slate-900/60">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.08] p-5">
+        <div>
+          <h3 className="font-semibold text-white">
+            Instance inventory
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Sample EC2-style records · Restart is simulated
+          </p>
+        </div>
+
+        <span className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-400">
+          {instances.length} records
+        </span>
       </div>
-    </main>
-  </div>
+
+      <div className="border-b border-white/[0.06] p-4">
+        <label className="block">
+          <span className="sr-only">Search instances</span>
+          <input
+            value={search}
+            onChange={event => onSearch(event.target.value)}
+            placeholder="Search by name, ID, type, team or status…"
+            className="w-full rounded-xl border border-white/10 bg-[#0b1120] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-400/40 sm:max-w-md"
+          />
+        </label>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="bg-white/[0.02] text-xs text-slate-500">
+            <tr>
+              <th className="px-5 py-3 font-medium">Instance</th>
+              <th className="px-5 py-3 font-medium">Instance ID</th>
+              <th className="px-5 py-3 font-medium">Type</th>
+              <th className="px-5 py-3 font-medium">Status</th>
+              <th className="px-5 py-3 font-medium">Team</th>
+              <th className="px-5 py-3 font-medium">Actions</th>
+            </tr>
+          </thead>
+
+          <tbody className="divide-y divide-white/[0.06]">
+            {instances.map(instance => (
+              <tr
+                key={instance.id}
+                className="transition hover:bg-white/[0.02]"
+              >
+                <td className="px-5 py-4">
+                  <p className="font-medium text-white">
+                    {instance.name}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {instance.zone}
+                  </p>
+                </td>
+
+                <td className="px-5 py-4 font-mono text-xs text-slate-400">
+                  {instance.id}
+                </td>
+
+                <td className="px-5 py-4 text-slate-400">
+                  {instance.type}
+                </td>
+
+                <td className="px-5 py-4">
+                  <StatusBadge status={instance.status} />
+                </td>
+
+                <td className="px-5 py-4 text-slate-400">
+                  {instance.team}
+                </td>
+
+                <td className="px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled
+                      title="Start is not implemented in the current backend"
+                      className="rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-slate-400 opacity-40"
+                    >
+                      Start
+                    </button>
+
+                    <button
+                      disabled={
+                        instance.status !== 'Running' ||
+                        Boolean(submitting)
+                      }
+                      onClick={() => onReboot(instance)}
+                      title="Submits a simulated restart job through the existing API"
+                      className="rounded-lg border border-cyan-400/20 px-3 py-2 text-xs font-medium text-cyan-300 transition hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      {submitting === instance.id
+                        ? 'Submitting…'
+                        : 'Restart'}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+
+            {instances.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  className="px-5 py-8 text-center text-sm text-slate-500"
+                >
+                  No instances match your search.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="border-t border-white/[0.06] px-5 py-3 text-xs text-slate-600">
+        Demo note: team labels are illustrative only. Backend team
+        authorization and real AWS operations are not implemented.
+      </p>
+    </section>
+  )
 }
 
-function InstanceTable({ instances, search, onSearch, onReboot, submitting }) {
-  return <section className="overflow-hidden rounded-2xl border border-white/[0.08] bg-slate-900/60">
-    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.08] p-5"><div><h3 className="font-semibold text-white">Instance inventory</h3><p className="mt-1 text-xs text-slate-500">Sample EC2-style records · restart is simulated</p></div><span className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-400">{instances.length} records</span></div>
-    <div className="border-b border-white/[0.06] p-4"><label className="block"><span className="sr-only">Search instances</span><input value={search} onChange={event => onSearch(event.target.value)} placeholder="Search by name, ID, type, team or status…" className="w-full rounded-xl border border-white/10 bg-[#0b1120] px-4 py-3 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-400/40 sm:max-w-md" /></label></div>
-    <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-white/[0.02] text-xs text-slate-500"><tr><th className="px-5 py-3 font-medium">Instance</th><th className="px-5 py-3 font-medium">Instance ID</th><th className="px-5 py-3 font-medium">Type</th><th className="px-5 py-3 font-medium">Status</th><th className="px-5 py-3 font-medium">Team</th><th className="px-5 py-3 font-medium">Actions</th></tr></thead><tbody className="divide-y divide-white/[0.06]">{instances.map(instance => <tr key={instance.id} className="transition hover:bg-white/[0.02]"><td className="px-5 py-4"><p className="font-medium text-white">{instance.name}</p><p className="mt-1 text-xs text-slate-500">{instance.zone}</p></td><td className="px-5 py-4 font-mono text-xs text-slate-400">{instance.id}</td><td className="px-5 py-4 text-slate-400">{instance.type}</td><td className="px-5 py-4"><StatusBadge status={instance.status} /></td><td className="px-5 py-4 text-slate-400">{instance.team}</td><td className="px-5 py-4"><div className="flex items-center gap-2"><button disabled title="Start is not implemented in the current backend" className="rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-slate-400 opacity-40">Start</button><button disabled={instance.status !== 'Running' || Boolean(submitting)} onClick={() => onReboot(instance)} title="Submits a simulated restart job through the existing API" className="rounded-lg border border-cyan-400/20 px-3 py-2 text-xs font-medium text-cyan-300 transition hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-30">{submitting === instance.id ? 'Submitting…' : 'Restart'}</button></div></td></tr>)}{instances.length === 0 && <tr><td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-500">No instances match your search.</td></tr>}</tbody></table></div>
-    <p className="border-t border-white/[0.06] px-5 py-3 text-xs text-slate-600">Demo note: team labels are illustrative only. Backend team authorization and real AWS operations are not implemented.</p>
-  </section>
-}
+function JobTable({
+  jobs,
+  title = 'Recent operations',
+  description = 'Statuses retrieved from the API',
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-white/[0.08] bg-slate-900/60">
+      <div className="flex items-center justify-between border-b border-white/[0.08] p-5">
+        <div>
+          <h3 className="font-semibold text-white">{title}</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            {description}
+          </p>
+        </div>
 
-function JobTable({ jobs }) {
-  return <section className="overflow-hidden rounded-2xl border border-white/[0.08] bg-slate-900/60"><div className="flex items-center justify-between border-b border-white/[0.08] p-5"><div><h3 className="font-semibold text-white">Recent operations</h3><p className="mt-1 text-xs text-slate-500">Statuses retrieved from the API</p></div><span className="text-xs text-slate-500">{jobs.length} jobs</span></div>{jobs.length === 0 ? <p className="p-5 text-sm text-slate-500">No jobs found in the queue.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[580px] text-left text-sm"><thead className="bg-white/[0.02] text-xs text-slate-500"><tr><th className="px-5 py-3 font-medium">Job ID</th><th className="px-5 py-3 font-medium">Instance</th><th className="px-5 py-3 font-medium">Action</th><th className="px-5 py-3 font-medium">Status</th><th className="px-5 py-3 font-medium">Time submitted</th></tr></thead><tbody className="divide-y divide-white/[0.06]">{jobs.map(job => <tr key={job.id} className="hover:bg-white/[0.02]"><td className="px-5 py-4 font-mono text-xs text-slate-400">{job.id}</td><td className="px-5 py-4 text-slate-300">{job.instance}</td><td className="px-5 py-4 text-slate-400">{job.action}</td><td className="px-5 py-4"><StatusBadge status={job.status === 'completed' ? 'Completed' : job.status === 'failed' ? 'Failed' : job.status} />{job.error && <p className="mt-1 max-w-xs text-xs text-rose-300">{job.error}</p>}</td><td className="px-5 py-4 text-xs text-slate-500">{job.time}</td></tr>)}</tbody></table></div>}</section>
+        <span className="text-xs text-slate-500">
+          {jobs.length} jobs
+        </span>
+      </div>
+
+      {jobs.length === 0 ? (
+        <p className="p-5 text-sm text-slate-500">
+          No jobs found. Submit a simulated restart to track a job here.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[580px] text-left text-sm">
+            <thead className="bg-white/[0.02] text-xs text-slate-500">
+              <tr>
+                <th className="px-5 py-3 font-medium">Job ID</th>
+                <th className="px-5 py-3 font-medium">Instance</th>
+                <th className="px-5 py-3 font-medium">Action</th>
+                <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">
+                  Time submitted
+                </th>
+              </tr>
+            </thead>
+
+            <tbody className="divide-y divide-white/[0.06]">
+              {jobs.map(job => (
+                <tr
+                  key={job.id}
+                  className="hover:bg-white/[0.02]"
+                >
+                  <td className="px-5 py-4 font-mono text-xs text-slate-400">
+                    {job.id}
+                  </td>
+
+                  <td className="px-5 py-4 text-slate-300">
+                    {job.instance}
+                  </td>
+
+                  <td className="px-5 py-4 text-slate-400">
+                    {job.action}
+                  </td>
+
+                  <td className="px-5 py-4">
+                    <StatusBadge status={job.status} />
+
+                    {job.error && (
+                      <p className="mt-1 max-w-xs text-xs text-rose-300">
+                        {job.error}
+                      </p>
+                    )}
+                  </td>
+
+                  <td className="px-5 py-4 text-xs text-slate-500">
+                    {job.time}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
 }
 
 export default App
