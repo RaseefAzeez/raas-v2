@@ -1,20 +1,42 @@
-#Environment Variables and Secrets
+# Environment Variables and Secrets
 .env
 .env.*
 !.env.example
 
-#Node.JS Dependencies
+# Node.js Dependencies
 node_modules/
 
-#Logs
+# Logs
 *.log
 npm-debug.log*
 
-#Terraform Local files and state
+# Terraform Local Files and State
 **/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfplan
+crash.log
+crash.*.log
+.terraformrc
+terraform.rc
 
-#macOS
+# Terraform Variable Files (may contain sensitive values)
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Terraform Override Files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# macOS
 .DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
