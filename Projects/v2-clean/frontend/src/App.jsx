@@ -212,6 +212,7 @@ function App() {
     try {
       await signInWithRedirect()
     } catch (error) {
+      console.error('Cognito sign-in failed:', error)
       setAuthError(error.message || 'Unable to start Cognito sign-in.')
     }
   }

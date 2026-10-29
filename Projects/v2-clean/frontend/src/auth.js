@@ -6,7 +6,13 @@ import {
     fetchAuthSession,
 } from 'aws-amplify/auth'
 
-Amplify.configure({
+console.log('Browser origin:', window.location.origin)
+console.log('Browser pathname:', window.location.pathname)
+console.log(
+    'Configured sign-in redirect:',
+    import.meta.env.VITE_COGNITO_REDIRECT_SIGN_IN
+)
+const amplifyConfig = {
     Auth: {
         Cognito: {
             userPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID,
@@ -27,8 +33,20 @@ Amplify.configure({
             },
         },
     },
-})
+}
 
+console.log(
+    'OAuth runtime diagnostic:',
+    JSON.stringify({
+        origin: window.location.origin,
+        pathname: window.location.pathname,
+        redirectSignIn: amplifyConfig.Auth.Cognito.loginWith.oauth.redirectSignIn,
+        redirectSignOut: amplifyConfig.Auth.Cognito.loginWith.oauth.redirectSignOut,
+        domain: amplifyConfig.Auth.Cognito.loginWith.oauth.domain,
+    }, null, 2),
+)
+
+Amplify.configure(amplifyConfig)
 export {
     signInWithRedirect,
     signOut,
